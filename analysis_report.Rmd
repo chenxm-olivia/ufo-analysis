@@ -1,0 +1,466 @@
+---
+title: "UFO Analysis: Clustering and Dimensionality Reduction"
+author: "Olivia Chen"
+date: "2023-11-7"
+output: html_document
+---
+
+## Project Setup
+
+Here is a Dockerfile that installs the relevant R packages and Python to the rocker/rstudio base image.
+
+```
+FROM rocker/rstudio
+RUN R -e "install.packages(c('tidyverse','matlab','aricode','plotly','htmlwidgets','markdown'))"
+RUN apt update && apt install -y python3 python3-pip
+RUN pip3 install numpy scikit-learn pandas
+
+```
+
+The source data of this homework include: 
+1) the compressed CSV file containing vectors that represent the 'Summary' field of the UFO dataset `embeddings_output_clean.csv.gz` and
+2) the original UFO dataset `ufo_data.csv`.
+Both files are saved in a `source_data/` folder in the working directory.
+
+Two additional folders need to be created in the working directory: `derived_data/` and `figures/`.
+
+In section 3, a Python script `tsne_projection.py` needs to be created (see details in the corresponding section).
+
+## 1. Principal Component Analysis (PCA)
+
+### 1.1 Load the data into R
+
+```{r}
+library(tidyverse)
+library(matlab)
+
+# Load data
+ufo_embed <- read_csv(gzfile("source_data/embeddings_output_clean.csv.gz"), col_names = FALSE)
+ufo_embed %>% write_csv("derived_data/embeddings_output_clean.csv", col_names = FALSE)
+
+```
+
+### 1.2 Perform PCA on the dataset
+
+```{r}
+png("figures/ufo_imagesc_summary_embeddings.png")
+imagesc(ufo_embed %>% as.matrix())
+dev.off()
+
+# PCA
+pca_result <- prcomp(ufo_embed %>% as.matrix())
+as.data.frame(pca_result$x) %>% write_csv("derived_data/pca_result_x.csv")
+as.data.frame(pca_result$x[,1:50]) %>% write_csv("derived_data/pca_result_x_50pcs.csv")
+
+png("figures/ufo_imagesc_pca.png")
+imagesc(pca_result$x)
+dev.off()
+```
+
+### 1.3 Plot the variance explained by each principal component as a function of the number of components
+
+```{r}
+# Create ggplot
+variance <- (pca_result$sdev)^2
+cumulative_variance <- cumsum(variance) / sum(variance)
+
+df <- data.frame(Dimension = 1:length(cumulative_variance), CumulativeVariance = cumulative_variance)
+
+ggplot(df, aes(x = Dimension, y = CumulativeVariance)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept = 0.85) +
+  xlab("Principal Component") +
+  ylab("Cumulative Proportion of Variance Explained") +
+  ggtitle("Figure 1. PCA Cumulative Variance Plot")
+ggsave("figures/explained_variance.png")
+
+```
+
+### 1.4 Interpret the plot and explain its implications
+
+The PCA cumulative variance plot shows the cumulative proportion of total variance in the data that is captured by the 1st to the nth principal components. 
+
+The sharp rise at the beginning of the curve indicates that the initial principal components captured a large amount of the variance.
+Specifically, approximately 85% of the variance is captured by the first ~100 principal components, and approximately 95% of the variance is captured by the first ~500 principal components.
+The curve almost flattens after the 1000th principal component, suggesting that including components beyond this point will not capture much more variance.
+
+In general, the PCA result implies that a relatively small number of principal components capture a considerable amount of variance in the data, thus we could potentially reduce the dimensionality of the data to the initial ~500 principal components without losing much information.
+
+## 2. Cluster Analysis in PCA Space
+
+### 2.1 Create a scatter plot of PC1 vs. PC2
+
+```{r}
+library(tidyverse)
+
+# Load PCA result and the original UFO data
+pca_result_x <- read_csv("derived_data/pca_result_x.csv")
+ufo_data <- read_csv("source_data/ufo_data.csv")
+
+# Merge the PCA result with the UFO data
+ufo_pca_x <- cbind(ufo_data, pca_result_x)
+ufo_pca_x$summary <- iconv(ufo_pca_x$Summary, to = "UTF-8")
+
+# Scatter plot for PC1 vs. PC2
+ggplot(pca_result_x, aes(x = PC1, y = PC2)) +
+  geom_point(alpha = 0.5) +
+  xlab("PC1") +
+  ylab("PC2") +
+  ggtitle("Figure 2.1. Scatter Plot of PC1 vs. PC2")
+ggsave("figures/scatter_pc1_pc2.png")
+
+# Scatter plot for PC1 vs. PC2 by the Summary field length
+ggplot(ufo_pca_x, aes(PC1, PC2)) +
+  geom_point(aes(color = factor(ntile(str_length(summary),5))), alpha = 0.5) +
+  xlab("PC1") +
+  ylab("PC2") +
+  labs(color = "Quintile of field length") +
+  ggtitle("Figure 2.2. Scatter Plot of PC1 vs. PC2 by Field Length")
+ggsave("figures/scatter_pc1_pc2_length.png")
+
+```
+
+### 2.2 Manually identify regions in the plot where points appear to cluster
+
+According to the scatter plot, there is one major dense vertical cluster, with PC1 values ranging from 0 to 100 and PC2 values ranging from -100 to 70. In particular, the cluster is especially dense around PC1 values of 75 to 95 and PC2 values of 45 to 70 (the upper end of the large vertical cluster). 
+
+In addition to this major cluster, there is a small cluster located around PC1 value of -55 and PC2 value of 5.
+
+Besides, it seems that field length is correlated with the two principal components, with the 5th quintile points clustering at the relatively smaller values of PC1 and PC2 (the lower part of the major vertical cluster) and the 4th quintile points clustering at the larger values of PC1 and PC2 (the upper end of the major vertical cluster).
+
+### 2.3 Identify corresponding indices in the original UFO dataset 
+
+```{r}
+library(plotly)
+library(htmlwidgets)
+
+ggplotly_html <- function(ggplot_object, filename) {
+  plotly_object <- ggplotly(ggplot_object)
+  saveWidget(plotly_object, file = filename)
+}
+
+(ggplot(ufo_pca_x, aes(PC1, PC2)) +
+  geom_point(aes(color = factor(ntile(str_length(summary),5))), alpha = 0.5) +
+    aes(text = summary) +
+    xlab("PC1") +
+    ylab("PC2") +
+    labs(color = "Quintile of field length") +
+  ggtitle("Scatter Plot of PC1 vs. PC2 by Field Length")) %>%
+  ggplotly_html("figures/pc1_pc2_length_cat.html")
+
+# Alternative way to check the content
+cluster1 <- ufo_pca_x %>% filter(PC1 >= 75 & PC1 <= 95, PC2 >= 45 & PC2 <=70)
+print(cluster1$Summary[1:100])
+
+cluster2 <- ufo_pca_x %>% filter(PC1 >= -60 & PC1 <= -50, PC2 >= 0 & PC2 <=10)
+print(cluster2$Summary[1:100])
+
+```
+
+### 2.4 Choose the two most densely populated regions in the 2D PCA projection and examine the corresponding 'Summary' fields from the original dataset
+
+I examined two most densely populated regions: 
+
+Cluster 1: 75 <= PC1 <= 95, 45 <= PC2 <=70; Cluster 2: -60 <= PC1 <= -50, 0 <= PC2 <= 10.
+
+After examining the corresponding "Summary" field of Cluster 1 in the original UFO dataset, it appears that these fields mostly include the NUFORC notes indicating the possible judgment of the observed object.
+
+After examining the corresponding field of Cluster 2 in the original data set, it appears that the contents are generally vague and mostly just describe lights. 
+
+### 2.5 Interpret the clusters: Do they represent specific phenomena or patterns?
+
+#### 2.5.1 Analysis of Cluster 1
+
+First, I examined the distribution of records with embedded NUFORC notes.
+Then, I roughly classified the objects as "space object", "aircraft", "other", and "unknown" and plotted the distribution.
+
+```{r}
+### Cluster analysis - NUFORC notes
+note <- paste(c("NUFORC", "PD", "note", "anon", "report"), collapse = "|")
+
+ufo_pca_x$incl_note <- ifelse(grepl(note, ufo_pca_x$summary, ignore.case = TRUE), "Presence", "Absence")
+
+ggplot(ufo_pca_x, aes(PC1, PC2)) +
+  geom_point(aes(color = incl_note), alpha = 0.5) +
+  xlab("PC1") +
+  ylab("PC2") +
+  labs(color = "NUFROC Note") +
+  ggtitle("Figure 2.3. Scatter Plot of PC1 vs. PC2 by NUFROC Note")
+ggsave("figures/scatter_pc1_pc2_note.png")
+
+### Cluster analysis - objects
+object_astron <- paste(c("a star", "a \"twinkling\" star", "twinkling star", "planet", "Venus", "meteor", "celestial", "Sirius", "Jupiter"), collapse = "|")
+object_aircraft <- paste(c("plane", "contrail", "craft", "Satellite", "Space Station"), collapse = "|")
+object_other <- paste(c("balloon", "lantern", "advertising lights"), collapse = "|")
+
+ufo_pca_x$objects <- ifelse(grepl(object_astron, ufo_pca_x$summary, ignore.case = TRUE), "Space object", 
+                           ifelse(grepl(object_aircraft, ufo_pca_x$summary, ignore.case = TRUE), "Aircraft", 
+                                  ifelse(grepl(object_other, ufo_pca_x$summary, ignore.case = TRUE), "Other", "Unknown")))
+
+ggplot(ufo_pca_x, aes(PC1, PC2)) +
+  geom_point(aes(color = objects), alpha = 0.5) +
+  xlab("PC1") +
+  ylab("PC2") +
+  labs(color = "Objects") +
+  ggtitle("Figure 2.4. Scatter Plot of PC1 vs. PC2 by Objects")
+ggsave("figures/scatter_pc1_pc2_objects.png")
+```
+
+According to Figure 2.3, this cluster appears to represent the "Summary" fields with NUFROC notes. 
+According to Figure 2.4, there are much many space objects than aircraft or other objects in this region. 
+These findings are consistent with my hypothesis.
+
+#### 2.5.2 Analysis of Cluster 2
+
+I created an indicator for mentions of any object or just lights and plotted the the distribution.
+
+```{r}
+### Cluster analysis - content
+object <- paste(c("star", "planet", "Venus", "meteor", "celestial", "Sirius", "Jupiter",
+                  "plane", "contrail", "craft", "Satellite", "Station", "object", "Space debris",
+                  "balloon", "lantern", "advertising lights", "pilot"), collapse = "|")
+
+ufo_pca_x$content <- ifelse(grepl(object, ufo_pca_x$summary, ignore.case = TRUE), "Any object", 
+                           ifelse(grepl("light", ufo_pca_x$summary, ignore.case = TRUE), "Just lights", "Other"))
+
+ggplot(ufo_pca_x, aes(PC1, PC2)) +
+  geom_point(aes(color = content), alpha = 0.5) +
+  xlab("PC1") +
+  ylab("PC2") +
+  labs(color = "Content") +
+  ggtitle("Figure 2.5. Scatter Plot of PC1 vs. PC2 by Content")
+ggsave("figures/scatter_pc1_pc2_content.png")
+
+```
+
+According to Figure 2.5, this cluster has a lower proportion of mentions of specific objects, which is somewhat consistent with my hypothesis. However, it is unclear what pattern this cluster represents. 
+
+## 3. t-SNE Projection
+
+### 3.1 Use the Python script to perform t-SNE on the dataset 
+
+Save the following Python script as a separate file in the working directory as "tsne_projection.py".
+
+```
+import csv
+import numpy as np
+from sklearn.manifold import TSNE
+import pandas as pd
+
+# Read the vectors from the CSV file
+vectors = []
+with open('derived_data/embeddings_output_clean.csv', 'r') as f:
+    reader = csv.reader(f)
+    for row in reader:
+        vectors.append([float(x) for x in row])
+
+# Convert to NumPy array
+vectors = np.array(vectors)
+
+# Apply t-SNE
+tsne = TSNE(n_components=2, random_state=0)
+vectors_tsne = tsne.fit_transform(vectors)
+
+# Save the 2D projections to a new CSV file
+df = pd.DataFrame(vectors_tsne, columns=['TSNE1', 'TSNE2'])
+df.to_csv('derived_data/tsne-projection.csv', index = False)
+
+```
+
+Then, run `python3 tsne_projection.py` in the terminal to generate the t-SNE 2D projections.
+
+### 3.2 Plot the t-SNE projection
+
+```{r}
+library(tidyverse)
+
+# Load data
+tsne_result <- read_csv("derived_data/tsne-projection.csv") %>% as_tibble() 
+ufo_data <- read_csv("source_data/ufo_data.csv")
+
+ufo_tsne <- cbind(ufo_data, tsne_result)
+ufo_tsne$summary <- iconv(ufo_tsne$Summary, to = "UTF-8")
+
+# Plot the t-SNE projection
+ggplot(tsne_result, aes(TSNE1, TSNE2)) +
+  geom_point(alpha = 0.5) +
+  xlab("V1") +
+  ylab("V2") +
+  ggtitle("Figure 3.1. Scatter Plot of 2D t-SNE Projection")
+ggsave("figures/scatter_tsne.png")
+
+# Cluster analysis - length
+ggplot(ufo_tsne, aes(TSNE1, TSNE2)) +
+  geom_point(aes(color = factor(ntile(str_length(summary),5))), alpha = 0.5) +
+  xlab("V1") +
+  ylab("V2") +
+  labs(color = "Quintile of field length") +
+  ggtitle("Figure 3.2. Scatter Plot of 2D t-SNE Projection by Field Length")
+ggsave("figures/scatter_tsne_length.png")
+```
+
+Figure 3.1 shows several distinct clusters. The largest cluster is centered around (V1 = -30, V2 = -10).
+The presence of distinct clusters suggests underlying structures of the high dimensional data.
+
+From Figure 3.2, the length of the "Summary" field appears to correlate with V1 of the t-SNE projection, with a larger value of V1 associated with a longer field. 
+Notably, the two clusters at the right upper corner are densely populated with dots in the highest quintile, while the left side of the largest cluster at the left lower corner is mostly populated with dots in the lowest quintile.
+
+
+### 3.3 Perform a similar analysis as in problem 2 on the t-SNE projection
+
+I examined two densely populated regions with relatively uniform length of the "Summary" field using plotly: 
+
+Cluster 1: 35 <= V1 <= 55, -30 <= v2 <= -10; Cluster 2: 0 <= V1 <= 20, 40 <= V2 <= 60.
+
+```{r}
+library(plotly)
+library(htmlwidgets)
+
+ggplotly_html <- function(ggplot_object, filename) {
+  plotly_object <- ggplotly(ggplot_object)
+  saveWidget(plotly_object, file = filename)
+}
+
+(ggplot(ufo_tsne, aes(TSNE1, TSNE2)) +
+  geom_point(aes(color = factor(ntile(str_length(summary),5))), alpha = 0.5) +
+    aes(text = summary) +
+    xlab("V1") +
+    ylab("V2") +
+    labs(color = "Quintile of field length") +
+  ggtitle("Scatter Plot of 2D t-SNE Projection by Field Length")) %>%
+  ggplotly_html("figures/tsne_length_cat.html")
+
+```
+
+The "Summary" fields of Cluster 1 in the original UFO dataset seem similar to the contents represented by Cluster 1 on the PC1 vs. PC2 plot above. 
+That is, this cluster includes the NUFORC notes indicating the possible judgment of the observed object.
+
+The "Summary" fields of Cluster 2 mostly reached the maximum length that is allowed for the input, as the recorded sentences are incomplete. Many of these records contain detailed descriptions of the situation when the UFO sighting happened.
+
+#### 3.3.1 Analysis of Cluster 1
+
+For Cluster 1, I examined the clustering pattern of 1) mentions of any object or just lights in the content and 2) observed object, as I did in 2.5 above.
+
+```{r}
+### Cluster analysis - content
+object <- paste(c("star", "planet", "Venus", "meteor", "celestial", "Sirius", "Jupiter",
+                  "plane", "contrail", "craft", "Satellite", "Station", "object", "Space debris",
+                  "balloon", "lantern", "advertising lights"), collapse = "|")
+
+ufo_tsne$content <- ifelse(grepl(object, ufo_tsne$summary, ignore.case = TRUE), "Any object", 
+                           ifelse(grepl("light", ufo_tsne$summary, ignore.case = TRUE), "Just lights", "Other"))
+
+ggplot(ufo_tsne, aes(TSNE1, TSNE2)) +
+  geom_point(aes(color = content), alpha = 0.5) +
+  xlab("V1") +
+  ylab("V2") +
+  labs(color = "Content") +
+  ggtitle("Figure 3.3. Scatter Plot of 2D t-SNE Projection by Content")
+ggsave("figures/scatter_tsne_content.png")
+
+### Cluster analysis - objects
+object_astron <- paste(c("a star", "a \"twinkling\" star", "twinkling star", "planet", "Venus", "meteor", "celestial", "Sirius", "Jupiter"), collapse = "|")
+object_aircraft <- paste(c("plane", "contrail", "craft", "Satellite", "Space Station"), collapse = "|")
+object_other <- paste(c("balloon", "lantern", "advertising lights"), collapse = "|")
+
+ufo_tsne$objects <- ifelse(grepl(object_astron, ufo_tsne$summary, ignore.case = TRUE), "Space object", 
+                           ifelse(grepl(object_aircraft, ufo_tsne$summary, ignore.case = TRUE), "Aircraft", 
+                                  ifelse(grepl(object_other, ufo_tsne$summary, ignore.case = TRUE), "Other", "Unknown")))
+
+ggplot(ufo_tsne, aes(TSNE1, TSNE2)) +
+  geom_point(aes(color = objects), alpha = 0.5) +
+  xlab("V1") +
+  ylab("V2") +
+  labs(color = "Objects") +
+  ggtitle("Figure 3.4. Scatter Plot of 2D t-SNE Projection by Objects")
+ggsave("figures/scatter_tsne_objects.png")
+
+```
+
+Figure 3.3 shows that Cluster 1 seems to represent reports of any object, while the other clusters represent a mix of any object and just lights.
+
+Figure 3.4 extends the finding on Cluster 1 that reports of space objects are represented in this cluster. Additionally, reports of aircraft are scattered sparsely across several other clusters.
+
+#### 3.3.2 Analysis of Cluster 2
+
+For Cluster 2, I examined the clustering pattern of mentions of first-person pronouns as an indicator for a detailed description of the context.
+
+```{r}
+### Cluster analysis - context
+pronouns <- paste(c(" I ", " I'", " my ", " me ", " we ", " us ", " our "), collapse = "|")
+
+ufo_tsne$pronouns <- ifelse(grepl(pronouns, ufo_tsne$summary, ignore.case = TRUE), "Mentions", "No mentions")
+
+ggplot(ufo_tsne, aes(TSNE1, TSNE2)) +
+  geom_point(aes(color = pronouns), alpha = 0.5) +
+  xlab("V1") +
+  ylab("V2") +
+  labs(color = "First-person pronouns") +
+  ggtitle("Figure 3.5 Scatter Plot of 2D t-SNE Projection by First-Person Pronouns")
+ggsave("figures/scatter_tsne_pronouns.png")
+
+```
+
+Figure 3.5 shows that Cluster 2 and part of its neighbor clusters appear to represent the records with mentions of first-person pronouns. 
+This finding suggests that the pattern I noted seems relevant but is not specific to Cluster 2. Further exploration of the contents is needed.
+
+## 4. Cluster Analysis and Mutual Information
+
+I set a seed for the k-means clustering analyses in this section for the reproducibility consideration.
+
+### 4.1 Perform k-means clustering on the t-SNE projections using 5 clusters
+
+```{r}
+library(tidyverse)
+library(matlab)
+library(aricode)
+
+set.seed(231030)
+
+# Perform k-means clustering on the 2D projections
+tsne_result <- read_csv("derived_data/tsne-projection.csv") %>% as.matrix()
+kmeans_tsne_result <- kmeans(tsne_result, centers = 5)
+
+tsne_kmeans_cluster <- cbind(tsne_result, as.data.frame(kmeans_tsne_result$cluster)) %>% 
+  mutate(cluster = as.factor(kmeans_tsne_result$cluster)) %>% select(TSNE1, TSNE2, cluster)
+
+ggplot(tsne_kmeans_cluster, aes(TSNE1, TSNE2)) +
+  geom_point(aes(color = cluster), alpha = 0.5) +
+  xlab("V1") +
+  ylab("V2") +
+  labs(color = "Cluster") +
+  ggtitle("Figure 4.1. K-means clustering on t-SNE Projection")
+ggsave("figures/kmeans_cluster_tsne.png")
+
+```
+
+### 4.2 Perform k-means clustering on the first 50 dimensions of the data in the principal component coordinate system using 5 clusters
+
+```{r}
+# Perform k-means clustering on the first 50 dimensions of the PCA
+pca_result_50pcs <- read_csv("derived_data/pca_result_x_50pcs.csv") %>% as.matrix()
+kmeans_pca_result <- kmeans(pca_result_50pcs, centers = 5)
+
+pca_kmeans_cluster <- cbind(pca_result_50pcs, as.data.frame(kmeans_pca_result$cluster)) %>% 
+  mutate(cluster = as.factor(kmeans_pca_result$cluster)) %>% select(PC1, PC2, cluster)
+
+ggplot(pca_kmeans_cluster, aes(PC1, PC2)) +
+  geom_point(aes(color = cluster), alpha = 0.5) +
+  labs(color = "Cluster") +
+  ggtitle("Figure 4.2. K-means clustering on PCA dimensions")
+ggsave("figures/kmeans_cluster_pca.png")
+
+```
+
+### 4.3 Calculate the Normalized Mutual Information (NMI) between these two sets of clusters 
+
+```{r}
+nmi <- NMI(tsne_kmeans_cluster$cluster, pca_kmeans_cluster$cluster)
+print(nmi)
+```
+
+The calculated NMI is 0.5558279, suggesting that the two sets of clusters share more than half of the information. 
+
+The two sets of clusters tend to have a decent match (more agreement than completely by chance), although there are still substantial differences between the result of the t-SNE 2D projection and the result of the first 50 dimensions of the principal component analysis. 
+
