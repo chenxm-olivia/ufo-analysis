@@ -1,0 +1,107 @@
+UFO Analysis: Clustering and Dimensionality Reduction
+============================================================
+
+## 1. Principal Component Analysis (PCA)
+
+![Figure 1](figures/explained_variance.png)
+The PCA cumulative variance plot shows the cumulative proportion of total variance in the data that is captured by the 1st to the nth principal components. 
+
+The sharp rise at the beginning of the curve indicates that the initial principal components captured a large amount of the variance.
+Specifically, approximately 85% of the variance is captured by the first ~100 principal components, and approximately 95% of the variance is captured by the first ~500 principal components.
+The curve almost flattens after the 1000th principal component, suggesting that including components beyond this point will not capture much more variance.
+
+In general, the PCA result implies that a relatively small number of principal components capture a considerable amount of variance in the data, thus we could potentially reduce the dimensionality of the data to the initial ~500 principal components without losing much information.
+
+## 2. Cluster Analysis in PCA Space
+
+![Figure 2.1](figures/scatter_pc1_pc2.png)
+According to the scatter plot, there is one major dense vertical cluster, with PC1 values ranging from 0 to 100 and PC2 values ranging from -100 to 70. 
+The cluster is especially dense around PC1 values of 75 to 95 and PC2 values of 45 to 70 (the upper end of the large vertical cluster). 
+
+In addition to this major cluster, there is a small cluster located around PC1 value of -55 and PC2 value of 5.
+
+![Figure 2.2](figures/scatter_pc1_pc2_length.png)
+It seems that field length is correlated with the two principal components, with the 5th quintile points clustering at the relatively smaller values of PC1 and PC2 (the lower part of the major vertical cluster) and the 4th quintile points clustering at the larger values of PC1 and PC2 (the upper end of the major vertical cluster).
+
+
+The associated summary field contents were attached to the scatter plot to identify the corresponding indices in the original UFO dataset. 
+[ggplotly for PCA](figures/pc1_pc2_length_cat.html)
+
+I examined two most densely populated regions: 
+
+* Cluster 1: 75 <= PC1 <= 95, 45 <= PC2 <=70
+* Cluster 2: -60 <= PC1 <= -50, 0 <= PC2 <= 10
+
+After examining the corresponding "Summary" field of Cluster 1 in the original UFO dataset, it appears that these fields mostly include the NUFORC notes indicating the possible judgment of the observed object.
+
+After examining the corresponding field of Cluster 2 in the original data set, it appears that the contents are generally vague and mostly just describe lights. 
+
+#### Analysis of Cluster 1
+
+First, I examined the distribution of records with embedded NUFORC notes.
+![Figure 2.3](figures/scatter_pc1_pc2_note.png)
+According to Figure 2.3, this cluster appears to represent the "Summary" fields with NUFROC notes. 
+
+Then, I roughly classified the objects as "space object", "aircraft", "other", and "unknown" and plotted the distribution.
+![Figure 2.4](figures/scatter_pc1_pc2_objects.png)
+According to Figure 2.4, there are much many space objects than aircraft or other objects in this region. 
+These findings are consistent with my hypothesis.
+
+#### Analysis of Cluster 2
+
+I created an indicator for mentions of any object or just lights and plotted the the distribution.
+![Figure 2.5](figures/scatter_pc1_pc2_content.png)
+
+According to Figure 2.5, this cluster has a lower proportion of mentions of specific objects, which is somewhat consistent with my hypothesis. However, it is unclear what pattern this cluster represents. 
+
+## 3. t-SNE Projection
+
+![Figure 3.1](figures/scatter_tsne.png)
+Figure 3.1 shows several distinct clusters. The largest cluster is centered around (V1 = -30, V2 = -10).
+The presence of distinct clusters suggests underlying structures of the high dimensional data.
+
+![Figure 3.2](figures/scatter_tsne_length.png)
+From Figure 3.2, the length of the "Summary" field appears to correlate with V1 of the t-SNE projection, with a larger value of V1 associated with a longer field. 
+Notably, the two clusters at the right upper corner are densely populated with dots in the highest quintile, while the left side of the largest cluster at the left lower corner is mostly populated with dots in the lowest quintile.
+
+#### Cluster Analysis
+
+I examined two densely populated regions with relatively uniform length of the "Summary" field using plotly: 
+
+* Cluster 1: 35 <= V1 <= 55, -30 <= v2 <= -10
+* Cluster 2: 0 <= V1 <= 20, 40 <= V2 <= 60.
+
+[ggplotly for t-SNE](figures/tsne_length_cat.html)
+
+The "Summary" fields of Cluster 1 in the original UFO dataset seem similar to the contents represented by Cluster 1 on the PC1 vs. PC2 plot above. 
+That is, this cluster includes the NUFORC notes indicating the possible judgment of the observed object.
+
+The "Summary" fields of Cluster 2 mostly reached the maximum length that is allowed for the input, as the recorded sentences are incomplete. Many of these records contain detailed descriptions of the situation when the UFO sighting happened.
+
+#### Analysis of Cluster 1
+
+For Cluster 1, I examined the clustering pattern of 1) mentions of any object or just lights in the content and 2) observed object, as I did for PCA above.
+![Figure 3.3](figures/scatter_tsne_content.png)
+Figure 3.3 shows that Cluster 1 seems to represent reports of any object, while the other clusters represent a mix of any object and just lights.
+
+![Figure 3.4](figures/scatter_tsne_objects.png)
+Figure 3.4 extends the finding on Cluster 1 that reports of space objects are represented in this cluster. Additionally, reports of aircraft are scattered sparsely across several other clusters.
+
+#### Analysis of Cluster 2
+
+For Cluster 2, I examined the clustering pattern of mentions of first-person pronouns as an indicator for a detailed description of the context.
+![Figure 3.5](figures/scatter_tsne_pronouns.png)
+
+Figure 3.5 shows that Cluster 2 and part of its neighbor clusters appear to represent the records with mentions of first-person pronouns. 
+This finding suggests that the pattern I noted seems relevant but is not specific to Cluster 2. Further exploration of the contents is needed.
+
+## 4. Cluster Analysis and Mutual Information
+
+I set a seed for the k-means clustering analyses in this section for the reproducibility consideration.
+![Figure 4.1](figures/kmeans_cluster_tsne.png)
+![Figure 4.2](figures/kmeans_cluster_pca.png)
+
+The calculated Normalized Mutual Information (NMI) between these two sets of clusters is 0.5558279, suggesting that the two sets of clusters share more than half of the information. 
+
+The two sets of clusters tend to have a decent match (more agreement than completely by chance), although there are still substantial differences between the result of the t-SNE 2D projection and the result of the first 50 dimensions of the principal component analysis. 
+
